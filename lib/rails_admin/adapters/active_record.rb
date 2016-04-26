@@ -104,10 +104,13 @@ module RailsAdmin
             else
               value = field.parse_value(value)
             end
-            statement, value1, value2 = StatementBuilder.new(column_infos[:column], column_infos[:type], value, operator).to_statement
+            statement, value1, *value2 = StatementBuilder.new(column_infos[:column], column_infos[:type], value, operator).to_statement
             @statements << statement if statement.present?
             @values << value1 unless value1.nil?
-            @values << value2 unless value2.nil?
+            Array.wrap(value2).each do |v|
+              @values << v
+            end
+            # @values << value2 unless value2.nil?
             table, column = column_infos[:column].split('.')
             @tables.push(table) if column
           end
@@ -151,8 +154,8 @@ module RailsAdmin
       end
 
       class StatementBuilder < RailsAdmin::AbstractModel::StatementBuilder
-        protected
 
+        protected
         def unary_operators
           {
             '_blank' => ["(#{@column} IS NULL OR #{@column} = '')"],
@@ -197,6 +200,41 @@ module RailsAdmin
           return unless ar_adapter == 'postgresql'
           return unless @value
 
+          String.class_eval do
+            def to_boolean
+              dc = strip.downcase
+              dc == 'true' if %{true false}.include?(dc)
+            end
+
+            def to_numeric
+              dc = strip
+              Integer(dc) rescue Float(dc) rescue nil
+            end
+
+
+            def to_string_array(separator = ',')
+              Array.wrap(split(separator).map(&:strip)).compact
+            end
+
+            def to_multitype_array(separator = ',')
+              to_string_array(separator).map do |s|
+                s.to_boolean || s.to_numeric || s
+              end.compact
+            end
+
+            def to_numeric_array(separator=',')
+              to_string_array(separator).map do |s|
+                s.to_numeric
+              end.compact
+            end
+
+            def to_boolean_array(separator=',')
+              to_string_array(separator).map do |s|
+                s.to_boolean
+              end.compact
+            end
+          end
+
           extract_operator_as_text = '#>>' #get path as text
           extract_operator_as_jsonb = '#>' #get path
           json_path = Array.wrap(@value[:json_field_name].split('.')).reject(&:blank?)
@@ -206,49 +244,123 @@ module RailsAdmin
           selection_as_jsonb = "(#{@column}#{extract_operator_as_jsonb}'{#{json_path.join(',')}}')"
           json_value = Array.wrap(@value[:json_field_value])
 
+          first = json_value.first
           case @operator
             when 'is', '=' then
-              return ["(#{selection_as_text}::boolean IS NOT NULL AND #{selection_as_text}::boolean = ?::boolean)", json_value.first] if %w{true false}.include?(json_value.first.downcase)
-              return ["(#{selection_as_text}::numeric IS NOT NULL AND #{selection_as_text}::numeric = ?)", json_value.first.to_f] if (!!Float(json_value.first) rescue false)
-              return ["(#{selection_as_text}::numeric IS NOT NULL AND #{selection_as_text}::numeric = ?)", json_value.first.to_i] if (!!Integer(json_value.first) rescue false)
-              return ["(#{selection_as_text} = ?)", json_value.first]
+              # is/= supports numbers, string, bool and arrays (elements equality without order)
+              array_value =first.to_multitype_array.join(',')
+              statement=%{(
+                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                  WHEN 'number' THEN #{selection_as_text}::numeric = ?
+                  WHEN 'string' THEN #{selection_as_text} = ?
+                  WHEN 'boolean' THEN #{selection_as_text}::boolean = ?
+                  WHEN 'array' THEN (#{selection_as_jsonb} <@ jsonb_build_array(?) AND
+                    #{selection_as_jsonb} @> jsonb_build_array(?))
+                  ELSE false
+                END
+              )}
+              [statement, first.to_numeric || 0, first || '', first.to_boolean || false, array_value, array_value]
+            when 'in' then
+              # in operand does not support arrays
+              statement = %{(
+                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                  WHEN 'number' THEN  #{selection_as_text}::numeric IN (?)
+                  WHEN 'string'  THEN  #{selection_as_text} IN (?)
+                  WHEN 'boolean' THEN  #{selection_as_text}::boolean IN (?)
+                  ELSE false
+                 END
+              )}
+              [statement, first.to_numeric_array, first.to_string_array, first.to_boolean_array]
             when 'is_present' then
               ["(#{selection_as_text} IS NOT NULL)"]
             when 'is_blank' then
               ["(#{selection_as_text} IS NULL)"]
             when 'like', 'contains' then
-              ["(#{selection_as_text} ILIKE ?)", '%'+json_value.first+'%']
+              ["(#{selection_as_text} ILIKE ?)", '%'+first+'%']
             when 'starts_with' then
-              ["(#{selection_as_text} ILIKE ?)", json_value.first+'%']
+              ["(#{selection_as_text} ILIKE ?)", first+'%']
             when 'ends_with' then
-              ["(#{selection_as_text} ILIKE ?)", '%'+json_value.first]
-            when 'in' then
-              ["(#{selection_as_text} IN (?))", json_value.first.split(',').map(&:strip).reject(&:blank?)]
+              ["(#{selection_as_text} ILIKE ?)", '%'+first]
             when 'is_true' then
-              ["(#{selection_as_text}::boolean)", true]
+              [%{(
+                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                  WHEN 'boolean' THEN (#{selection_as_text}::boolean)
+                  ELSE false
+                END
+              )}]
             when 'is_false' then
-              ["(NOT #{selection_as_text}::boolean)", false]
+              [%{(
+                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                  WHEN 'boolean' THEN NOT (#{selection_as_text}::boolean)
+                  ELSE false
+                END
+              )}]
             when 'between' then
-              json_value = json_value.map { |n| Float(n) rescue nil }.compact.uniq
-              return if json_value.size < 2
-              min = json_value.min
-              max = json_value.max
-              ["(#{selection_as_text}::float BETWEEN ? AND ?)", min, max]
+              values = json_value.map { |n| n.to_numeric }.compact.uniq
+              if values.size < 2
+                [
+                  %{(
+                    CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                      WHEN 'number' THEN #{selection_as_text}::numeric BETWEEN ? AND ?
+                      ELSE false
+                    END
+                  )},
+                  values.min,
+                  values.max
+                ]
+              end
             when 'over' then
-              num = json_value.first.try { |n| Float(n) }
-              return unless num
-              ["(#{selection_as_text}::float >= ?)", num]
+              if first.to_numeric
+                [
+                  %{(
+                    CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                      WHEN 'number' THEN #{selection_as_text}::numeric >= ?
+                      ELSE false
+                    END
+                  )},
+                  first.to_numeric
+                ]
+              end
             when 'under' then
-              num = json_value.first.try { |n| Float(n) }
-              return unless num
-              ["(#{selection_as_text}::float <= ?)", num]
+              if first.to_numeric
+                [
+                  %{(
+                    CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                      WHEN 'number' THEN #{selection_as_text}::numeric < ?
+                      ELSE false
+                    END
+                  )},
+                  first.to_numeric
+                ]
+              end
             when 'includes' then
-              vals = json_value.first.split(',').map(&:strip).reject(&:blank?)
-              ["(CASE jsonb_typeof(#{selection_as_jsonb}::jsonb) WHEN 'array' THEN #{selection_as_jsonb} @> jsonb_build_array(?) ELSE false END)", json_value.first.split(',').map(&:strip).reject(&:blank?)]
+              [
+                %{(
+                  CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                    WHEN 'array' THEN #{selection_as_jsonb}::jsonb @> jsonb_build_array(?)
+                    ELSE false
+                  END
+                )},
+                first.to_multitype_array
+              ]
             when 'empty' then
-              ["(CASE jsonb_typeof(#{selection_as_jsonb}::jsonb) WHEN 'array' THEN jsonb_array_length(#{selection_as_jsonb}::jsonb) <= ? ELSE false END)", 0]
+              [
+                %{(
+                  CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                    WHEN 'array' THEN jsonb_array_length(#{selection_as_jsonb}::jsonb) <= 0
+                    ELSE false
+                  END
+                )}
+              ]
             when 'not_empty' then
-              ["(CASE jsonb_typeof(#{selection_as_jsonb}::jsonb) WHEN 'array' THEN jsonb_array_length(#{selection_as_jsonb}::jsonb) > ? ELSE false END)", 0]
+              [
+                %{(
+                  CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                    WHEN 'array' THEN jsonb_array_length(#{selection_as_jsonb}::jsonb) > 0
+                    ELSE false
+                  END
+                )}
+              ]
             else
           end
         end
