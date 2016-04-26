@@ -282,19 +282,23 @@ module RailsAdmin
             when 'ends_with' then
               ["(#{selection_as_text} ILIKE ?)", '%'+first]
             when 'is_true' then
-              [%{(
-                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
-                  WHEN 'boolean' THEN (#{selection_as_text}::boolean)
-                  ELSE false
-                END
-              )}]
+              [
+                %{(
+                  CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                    WHEN 'boolean' THEN (#{selection_as_text}::boolean)
+                    ELSE false
+                  END
+                )}
+              ]
             when 'is_false' then
-              [%{(
-                CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
-                  WHEN 'boolean' THEN NOT (#{selection_as_text}::boolean)
-                  ELSE false
-                END
-              )}]
+              [
+                %{(
+                  CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
+                    WHEN 'boolean' THEN NOT (#{selection_as_text}::boolean)
+                    ELSE false
+                  END
+                )}
+              ]
             when 'between' then
               values = json_value.map { |n| n.to_numeric }.compact.uniq
               if values.size < 2
