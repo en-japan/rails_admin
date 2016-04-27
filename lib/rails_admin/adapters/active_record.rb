@@ -198,8 +198,9 @@ module RailsAdmin
 
         def build_statement_for_jsonb
           return unless ar_adapter == 'postgresql'
-          return unless @value
+          return unless @value && @value[:json_field_name]
 
+          #TODO: I would like to have this done through refinements in this Class' scope only. Can someone help?
           String.class_eval do
             def to_boolean
               dc = strip.downcase
@@ -242,7 +243,8 @@ module RailsAdmin
 
           selection_as_text = "(#{@column}#{extract_operator_as_text}'{#{json_path.join(',')}}')"
           selection_as_jsonb = "(#{@column}#{extract_operator_as_jsonb}'{#{json_path.join(',')}}')"
-          json_value = Array.wrap(@value[:json_field_value])
+
+          json_value = Array.wrap(@value[:json_field_value].reject(&:blank?))
 
           first = json_value.first
           case @operator

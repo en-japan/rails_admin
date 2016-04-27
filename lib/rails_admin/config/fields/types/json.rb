@@ -23,9 +23,7 @@ module RailsAdmin
           end
 
           def clean_filter_input(value)
-            v = value.with_indifferent_access
-            v[:json_field_value] = v[:json_field_value].reject(&:blank?)
-            v
+            value.with_indifferent_access
           end
 
         end
