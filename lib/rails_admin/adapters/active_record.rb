@@ -256,8 +256,8 @@ module RailsAdmin
                   WHEN 'number' THEN #{selection_as_text}::numeric = ?
                   WHEN 'string' THEN #{selection_as_text} = ?
                   WHEN 'boolean' THEN #{selection_as_text}::boolean = ?
-                  WHEN 'array' THEN (#{selection_as_jsonb} <@ jsonb_build_array(?) AND
-                    #{selection_as_jsonb} @> jsonb_build_array(?))
+                  WHEN 'array' THEN (#{selection_as_jsonb} <@ json_build_array(?)::jsonb AND
+                    #{selection_as_jsonb} @> json_build_array(?)::jsonb)
                   ELSE false
                 END
               )}
@@ -343,7 +343,7 @@ module RailsAdmin
               [
                 %{(
                   CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
-                    WHEN 'array' THEN #{selection_as_jsonb}::jsonb @> jsonb_build_array(?)
+                    WHEN 'array' THEN #{selection_as_jsonb}::jsonb @> json_build_array(?)::jsonb
                     ELSE false
                   END
                 )},
@@ -427,6 +427,7 @@ module RailsAdmin
         def ar_adapter
           ::ActiveRecord::Base.connection.adapter_name.downcase
         end
+
       end
     end
   end
