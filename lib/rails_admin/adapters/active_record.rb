@@ -301,11 +301,11 @@ module RailsAdmin
               ]
             when 'between' then
               values = json_value.map { |n| n.to_numeric }.compact.uniq
-              if values.size < 2
+              if values.size >= 2
                 [
                   %{(
                     CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
-                      WHEN 'number' THEN #{selection_as_text}::numeric BETWEEN ? AND ?
+                      WHEN 'number' THEN #{selection_as_text}::numeric BETWEEN ?::numeric AND ?::numeric
                       ELSE false
                     END
                   )},
