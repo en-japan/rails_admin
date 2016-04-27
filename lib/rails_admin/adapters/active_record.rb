@@ -250,7 +250,7 @@ module RailsAdmin
           case @operator
             when 'is', '=' then
               # is/= supports numbers, string, bool and arrays (elements equality without order)
-              array_value =first.to_multitype_array.join(',')
+              array_value =first.to_multitype_array
               statement=%{(
                 CASE jsonb_typeof(#{selection_as_jsonb}::jsonb)
                   WHEN 'number' THEN #{selection_as_text}::numeric = ?
