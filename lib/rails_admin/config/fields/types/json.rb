@@ -14,12 +14,18 @@ module RailsAdmin
           end
 
           def parse_value(value)
-            value.present? ? JSON.parse(value) : nil
+            return JSON.parse(value) if value.is_a?(::String)
+            return clean_filter_input(value) if value.is_a?(::Hash)
           end
 
           def parse_input(params)
-            params[name] = parse_value(params[name]) if params[name].is_a?(::String)
+            params[name] = parse_value(params[name])
           end
+
+          def clean_filter_input(value)
+            value.with_indifferent_access
+          end
+
         end
       end
     end

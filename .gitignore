@@ -35,3 +35,4 @@ nbproject
 /spec/dummy_app/vendor/bundle
 *.iml
 
+.rakeTasks
